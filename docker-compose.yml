@@ -1,0 +1,155 @@
+name: quali-fly
+
+# Phase 0 infrastructure: postgres (pgvector) + backend + frontend + nginx.
+# Every value below can be overridden by a root .env file (see .env.example).
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-quali_fly}
+      POSTGRES_USER: ${POSTGRES_USER:-quali_fly}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-quali_fly}
+      # The application role is deliberately NOT a superuser: superusers bypass RLS.
+      APP_DB_ROLE: ${APP_DB_ROLE:-quali_fly_app}
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:-quali_fly_app}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      # Creates the non-superuser application role on first initialisation.
+      - ./infra/postgres/init:/docker-entrypoint-initdb.d:ro
+    # Not published: PostgreSQL is reachable only on the internal network.
+    # For a local shell use: docker compose exec postgres psql -U quali_fly quali_fly
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 10s
+      retries: 12
+      start_period: 20s
+    networks: [app]
+
+  backend:
+    build:
+      context: ./backend
+    restart: unless-stopped
+    environment:
+      APP_ENV: ${APP_ENV:-development}
+      APP_NAME: ${APP_NAME:-quali-fly-api}
+      APP_VERSION: ${APP_VERSION:-0.1.0}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      # Unprivileged role: RLS applies to it.
+      DATABASE_URL: postgresql+asyncpg://${APP_DB_ROLE:-quali_fly_app}:${APP_DB_PASSWORD:-quali_fly_app}@postgres:5432/${POSTGRES_DB:-quali_fly}
+      # Owner role: used only by `alembic upgrade head` and the dev seed.
+      MIGRATION_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-quali_fly}:${POSTGRES_PASSWORD:-quali_fly}@postgres:5432/${POSTGRES_DB:-quali_fly}
+      # Unprivileged role name, needed by migration 0003 to GRANT EXECUTE on the
+      # trusted source-resolution function to that role only.
+      APP_DB_ROLE: ${APP_DB_ROLE:-quali_fly_app}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000,http://localhost:8080}
+      API_PREFIX: ${API_PREFIX:-/api/v1}
+      SESSION_TTL_SECONDS: ${SESSION_TTL_SECONDS:-604800}
+      # Platform-level Meta app secret used to verify X-Hub-Signature-256 and to
+      # exchange an OAuth code server-to-server. Empty in local development, in which
+      # case webhook delivery fails closed and OAuth returns 503.
+      META_APP_SECRET: ${META_APP_SECRET:-}
+      # Meta OAuth. META_APP_ID and META_OAUTH_REDIRECT_URI are only needed for the
+      # connect flow; META_TOKEN_ENCRYPTION_KEY encrypts the resulting access token at
+      # rest and is REQUIRED when APP_ENV=production.
+      META_APP_ID: ${META_APP_ID:-}
+      META_OAUTH_REDIRECT_URI: ${META_OAUTH_REDIRECT_URI:-}
+      META_TOKEN_ENCRYPTION_KEY: ${META_TOKEN_ENCRYPTION_KEY:-}
+      META_GRAPH_API_VERSION: ${META_GRAPH_API_VERSION:-v26.0}
+      META_GRAPH_TIMEOUT_SECONDS: ${META_GRAPH_TIMEOUT_SECONDS:-10}
+      # Phase 5 AI qualification. Off by default: with no provider key the product
+      # captures inbound messages without replying, which is the intended degraded
+      # mode. Setting AI_ENABLED=true without GROQ_API_KEY fails the boot rather than
+      # failing every inbound message at the provider.
+      AI_ENABLED: ${AI_ENABLED:-false}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_ENABLED: ${GEMINI_ENABLED:-true}
+      AI_PRIMARY_PROVIDER: ${AI_PRIMARY_PROVIDER:-groq}
+      AI_FALLBACK_PROVIDER: ${AI_FALLBACK_PROVIDER:-gemini}
+      GROQ_PRIMARY_MODEL: ${GROQ_PRIMARY_MODEL:-llama-3.1-8b-instant}
+      GROQ_ESCALATION_MODEL: ${GROQ_ESCALATION_MODEL:-llama-3.3-70b-versatile}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.5-flash}
+      AI_TEMPERATURE: ${AI_TEMPERATURE:-0.3}
+      AI_GEMINI_TEMPERATURE: ${AI_GEMINI_TEMPERATURE:-1.0}
+      AI_MAX_OUTPUT_TOKENS: ${AI_MAX_OUTPUT_TOKENS:-150}
+      AI_REQUEST_TIMEOUT_SECONDS: ${AI_REQUEST_TIMEOUT_SECONDS:-20}
+      AI_MAX_PROVIDER_ATTEMPTS: ${AI_MAX_PROVIDER_ATTEMPTS:-3}
+      AI_MAX_BACKOFF_SECONDS: ${AI_MAX_BACKOFF_SECONDS:-2}
+      AI_HISTORY_LIMIT: ${AI_HISTORY_LIMIT:-10}
+      AI_MAX_RESPONSE_CHARS: ${AI_MAX_RESPONSE_CHARS:-1000}
+      AI_MAX_PROMPT_CHARS: ${AI_MAX_PROMPT_CHARS:-12000}
+      AI_HANDOFF_SCORE_THRESHOLD: ${AI_HANDOFF_SCORE_THRESHOLD:-75}
+      # Phase 6 knowledge base / RAG. Off by default: with no knowledge indexed the
+      # AI simply carries on without it, which is the intended degraded mode.
+      # EMBEDDING_DIMENSION is validated against the provider at startup, so
+      # setting it to anything other than the provider's width fails the boot.
+      EMBEDDING_ENABLED: ${EMBEDDING_ENABLED:-false}
+      EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-hashing}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-hashed-ngram-384}
+      EMBEDDING_DIMENSION: ${EMBEDDING_DIMENSION:-384}
+      EMBEDDING_TIMEOUT: ${EMBEDDING_TIMEOUT:-30}
+      KNOWLEDGE_CHUNK_SIZE: ${KNOWLEDGE_CHUNK_SIZE:-1200}
+      KNOWLEDGE_CHUNK_OVERLAP: ${KNOWLEDGE_CHUNK_OVERLAP:-200}
+      KNOWLEDGE_MAX_CHUNKS_PER_DOCUMENT: ${KNOWLEDGE_MAX_CHUNKS_PER_DOCUMENT:-500}
+      RAG_TOP_K: ${RAG_TOP_K:-5}
+      RAG_MIN_SIMILARITY: ${RAG_MIN_SIMILARITY:-0.15}
+      RAG_MAX_CONTEXT_CHARS: ${RAG_MAX_CONTEXT_CHARS:-4000}
+      # Phase 7 automated follow-ups. Off by default: with it off, the poller is not even
+      # started, and inbound messages are answered by Phase 5 exactly as before.
+      # The durable state is the `scheduled_tasks` table, not this poller, so a container
+      # restart loses nothing.
+      FOLLOW_UP_ENABLED: ${FOLLOW_UP_ENABLED:-false}
+      FOLLOW_UP_POLL_INTERVAL_SECONDS: ${FOLLOW_UP_POLL_INTERVAL_SECONDS:-30}
+      FOLLOW_UP_BATCH_SIZE: ${FOLLOW_UP_BATCH_SIZE:-20}
+      FOLLOW_UP_PROCESSING_LEASE_SECONDS: ${FOLLOW_UP_PROCESSING_LEASE_SECONDS:-300}
+      FOLLOW_UP_MAX_ATTEMPTS: ${FOLLOW_UP_MAX_ATTEMPTS:-3}
+      FOLLOW_UP_RETRY_BASE_SECONDS: ${FOLLOW_UP_RETRY_BASE_SECONDS:-60}
+      FOLLOW_UP_GHOSTED_DAYS: ${FOLLOW_UP_GHOSTED_DAYS:-7}
+      FOLLOW_UP_AI_ENHANCE: ${FOLLOW_UP_AI_ENHANCE:-true}
+      # Phase 8. On by default because a conversation that needs a person must
+      # not be left to the AI: with this off, an escalation is recorded by Phase 5
+      # and then nothing happens with it.
+      HANDOFF_ENABLED: ${HANDOFF_ENABLED:-true}
+      HANDOFF_ACKNOWLEDGEMENT_TEXT: ${HANDOFF_ACKNOWLEDGEMENT_TEXT:-Thanks for your patience - I've passed this to our team and someone will be in touch shortly.}
+      HANDOFF_PREVIEW_CHARS: ${HANDOFF_PREVIEW_CHARS:-280}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [app]
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        # Empty = same origin, so Nginx proxies /api and /health to the backend.
+        NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-}
+        NEXT_PUBLIC_BETTER_AUTH_URL: ${NEXT_PUBLIC_BETTER_AUTH_URL:-http://localhost:8080}
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks: [app]
+
+  nginx:
+    image: nginxinc/nginx-unprivileged:1.29-alpine
+    restart: unless-stopped
+    ports:
+      - "${HTTP_PORT:-8080}:8080"
+    volumes:
+      - ./infra/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      backend:
+        condition: service_healthy
+      frontend:
+        condition: service_healthy
+    networks: [app]
+
+volumes:
+  postgres_data:
+
+networks:
+  app:
+    driver: bridge

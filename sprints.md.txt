@@ -1,0 +1,1379 @@
+# Product implementation roadmap
+
+I would divide the product into **12 major phases / ~30 implementation sprints**.
+
+The important distinction:
+
+* **Phase 0–7 → Launchable commercial MVP**
+* **Phase 8–10 → Scale/product maturity**
+* **Phase 11 → post-MVP expansion**
+
+---
+
+# PHASE 0 — Foundation & Engineering Setup
+
+### Goal
+
+Create the production skeleton before implementing business functionality.
+
+### Sprint 0.1 — Repository + architecture
+
+```text
+frontend/
+backend/
+infra/
+docs/
+```
+
+Lock:
+
+```text
+Next.js
+TypeScript
+Tailwind
+shadcn/ui
+Better Auth
+FastAPI
+Python 3.12
+SQLAlchemy 2
+Alembic
+PostgreSQL
+pgvector
+APScheduler
+Docker Compose
+Nginx
+```
+
+### Sprint 0.2 — Local infrastructure
+
+Docker:
+
+```text
+postgres
+backend
+frontend
+nginx
+```
+
+Initially **no mandatory Redis**.
+
+Deliver:
+
+```text
+docker compose up
+        ↓
+frontend works
+backend works
+postgres works
+health checks work
+```
+
+### Sprint 0.3 — Backend foundation
+
+Implement:
+
+```text
+config
+database
+SQLAlchemy
+Alembic
+logging
+error handling
+API response conventions
+environment validation
+```
+
+### Sprint 0.4 — Frontend foundation
+
+Implement:
+
+```text
+App shell
+routing
+layout
+theme
+shadcn
+API client
+query client
+error/loading states
+```
+
+### Exit gate
+
+We cannot proceed until:
+
+```text
+✓ frontend starts
+✓ backend starts
+✓ PostgreSQL starts
+✓ migration works
+✓ health endpoint works
+✓ production Docker build works
+```
+
+---
+
+# PHASE 1 — Identity, Tenancy & SaaS Core
+
+This is the foundation of the entire product.
+
+## Sprint 1.1 — Tenant
+
+Entities:
+
+```text
+Tenant
+```
+
+Fields from PRD:
+
+```text
+id
+name
+plan
+status
+webhook_verify_token
+follow_up_templates
+created_at
+```
+
+The PRD defines Starter/Growth/Scale/Enterprise plans and tenant isolation. 
+
+## Sprint 1.2 — Users
+
+```text
+User
+```
+
+Implement:
+
+```text
+signup
+login
+logout
+session
+tenant membership
+```
+
+Use Better Auth on the Next.js side, while FastAPI remains the authoritative business/API authorization layer.
+
+## Sprint 1.3 — Authorization
+
+Roles:
+
+```text
+OWNER
+ADMIN
+AGENT
+```
+
+At minimum:
+
+```text
+tenant isolation
+role checks
+resource ownership where required
+```
+
+## Sprint 1.4 — PostgreSQL RLS
+
+Implement:
+
+```text
+tenant_id
+RLS policies
+tenant context
+repository tenant filtering
+```
+
+The PRD specifically calls for application-level tenant scoping plus PostgreSQL RLS. 
+
+### Exit gate
+
+We should be able to:
+
+```text
+Tenant A
+   ↓
+User A
+   ↓
+Login
+   ↓
+Tenant A data
+
+Tenant B
+   ↓
+User B
+   ↓
+Login
+   ↓
+Tenant B data
+```
+
+and prove:
+
+```text
+Tenant A cannot read Tenant B data.
+```
+
+---
+
+# PHASE 2 — Meta Integration Foundation
+
+Now we connect the product to the real world.
+
+## Sprint 2.1 — Meta connection model
+
+```text
+MetaConnection
+```
+
+Support:
+
+```text
+Facebook Page
+Instagram Business
+access tokens
+page IDs
+Instagram business IDs
+connection status
+```
+
+The PRD defines `meta_connections` around these concepts. 
+
+## Sprint 2.2 — Webhook verification
+
+Implement:
+
+```text
+GET /webhook
+```
+
+with Meta verification.
+
+## Sprint 2.3 — Webhook security
+
+Implement:
+
+```text
+POST /webhook
+```
+
+with:
+
+```text
+raw request body
+HMAC-SHA256
+X-Hub-Signature-256
+```
+
+as specified in the PRD. 
+
+## Sprint 2.4 — Event ingestion
+
+Create an internal ingestion layer:
+
+```text
+Meta webhook
+      ↓
+signature verification
+      ↓
+event normalization
+      ↓
+tenant resolution
+      ↓
+persist event
+```
+
+### Critical design decision
+
+Don't immediately run the entire AI pipeline inside the webhook request.
+
+The webhook should:
+
+```text
+receive
+validate
+persist
+ack
+```
+
+Then processing happens asynchronously.
+
+This protects us from Meta/network/LLM latency.
+
+---
+
+# PHASE 3 — Lead Engine
+
+Now the product starts becoming a real product.
+
+## Sprint 3.1 — Lead entity
+
+Implement:
+
+```text
+Lead
+```
+
+including:
+
+```text
+tenant_id
+meta_leadgen_id
+name
+email
+phone
+source
+status
+qualification
+timestamps
+```
+
+The PRD explicitly requires tenant + Meta lead deduplication. 
+
+## Sprint 3.2 — Meta Lead Ads ingestion
+
+Flow:
+
+```text
+Meta
+ ↓
+leadgen webhook
+ ↓
+leadgen_id
+ ↓
+Graph API
+ ↓
+lead details
+ ↓
+Lead
+```
+
+## Sprint 3.3 — Idempotency
+
+Very important.
+
+If Meta sends the same event 5 times:
+
+```text
+event
+event
+event
+event
+event
+```
+
+we create:
+
+```text
+ONE lead
+```
+
+not five.
+
+Use:
+
+```text
+UNIQUE(tenant_id, meta_leadgen_id)
+```
+
+as specified by the PRD. 
+
+## Sprint 3.4 — Lead lifecycle
+
+Implement:
+
+```text
+NEW
+REPLIED
+QUALIFIED
+CLOSED
+GHOSTED
+HUMAN_HANDOFF
+```
+
+with controlled transitions.
+
+---
+
+# PHASE 4 — Conversation Engine
+
+This is the second core pillar.
+
+## Sprint 4.1 — Conversation
+
+Implement:
+
+```text
+Conversation
+```
+
+## Sprint 4.2 — Messages
+
+Implement:
+
+```text
+Message
+```
+
+with:
+
+```text
+INBOUND
+OUTBOUND
+```
+
+plus:
+
+```text
+platform
+meta_message_id
+timestamp
+AI model
+tokens
+latency
+```
+
+The PRD specifies this conversation/message tracking. 
+
+## Sprint 4.3 — Messenger
+
+Flow:
+
+```text
+Messenger
+ ↓
+Webhook
+ ↓
+Conversation
+ ↓
+Message
+```
+
+and outbound:
+
+```text
+AI
+ ↓
+Meta Graph API
+ ↓
+Messenger
+```
+
+## Sprint 4.4 — Instagram
+
+Same abstraction:
+
+```text
+Instagram
+ ↓
+Webhook
+ ↓
+Conversation
+ ↓
+AI
+ ↓
+Instagram
+```
+
+### Architectural rule
+
+Do NOT create three separate conversation engines.
+
+Build:
+
+```text
+ChannelAdapter
+```
+
+conceptually:
+
+```text
+MessengerAdapter
+InstagramAdapter
+WhatsAppAdapter (later)
+```
+
+while the core remains:
+
+```text
+Lead
+Conversation
+Message
+AI
+```
+
+---
+
+# PHASE 5 — AI Qualification Engine
+
+This is where the product becomes differentiated.
+
+## Sprint 5.1 — AI provider abstraction
+
+```text
+LLMProvider
+```
+
+Implement:
+
+```text
+GroqProvider
+GeminiProvider
+```
+
+Architecture:
+
+```text
+AIService
+   │
+   ├── Groq
+   │
+   └── Gemini fallback
+```
+
+## Sprint 5.2 — Prompt engine
+
+Build the system prompt around:
+
+```text
+business context
+lead context
+conversation
+knowledge
+qualification
+handoff rules
+```
+
+## Sprint 5.3 — Structured AI output
+
+Strict schema:
+
+```json
+{
+  "message": "...",
+  "qualification_update": {
+    "budget": 0,
+    "timeline": 0,
+    "fit": 0,
+    "authority": 0
+  },
+  "human_handoff": false,
+  "handoff_reason": null
+}
+```
+
+This matches the PRD's qualification model. 
+
+## Sprint 5.4 — AI response engine
+
+Implement:
+
+```text
+incoming message
+      ↓
+conversation context
+      ↓
+AI
+      ↓
+validate output
+      ↓
+qualification update
+      ↓
+handoff decision
+      ↓
+response
+```
+
+## Sprint 5.5 — AI failure handling
+
+Implement:
+
+```text
+Groq 429
+   ↓
+retry
+   ↓
+larger model
+   ↓
+Gemini
+   ↓
+human handoff
+```
+
+The PRD explicitly specifies provider fallback and human handoff on AI failure. 
+
+---
+
+# PHASE 6 — Knowledge Base + RAG
+
+Now give the AI business knowledge.
+
+## Sprint 6.1 — Knowledge base CRUD
+
+```text
+KnowledgeBaseDocument
+```
+
+Support:
+
+```text
+create
+update
+delete
+list
+```
+
+## Sprint 6.2 — Chunking
+
+```text
+document
+ ↓
+chunks
+```
+
+## Sprint 6.3 — Embeddings
+
+```text
+chunk
+ ↓
+embedding
+ ↓
+pgvector
+```
+
+Your PRD specifies PostgreSQL + pgvector and a 1536-dimensional vector. 
+
+## Sprint 6.4 — Retrieval
+
+```text
+user question
+     ↓
+embedding
+     ↓
+pgvector
+     ↓
+top 5
+     ↓
+context
+```
+
+with:
+
+```text
+tenant_id
+```
+
+filtering.
+
+## Sprint 6.5 — RAG → AI
+
+Final flow:
+
+```text
+Lead message
+     ↓
+retrieve knowledge
+     ↓
+conversation context
+     ↓
+AI
+     ↓
+response
+```
+
+---
+
+# PHASE 7 — Automated Follow-Up Engine
+
+This is the other major product pillar.
+
+## Sprint 7.1 — Scheduled tasks
+
+Implement:
+
+```text
+ScheduledTask
+```
+
+States:
+
+```text
+PENDING
+PROCESSING
+COMPLETED
+CANCELLED
+FAILED
+```
+
+## Sprint 7.2 — Scheduler
+
+APScheduler:
+
+```text
+every 30 sec
+     ↓
+find due tasks
+     ↓
+FOR UPDATE SKIP LOCKED
+     ↓
+execute
+```
+
+The PRD explicitly proposes this approach. 
+
+## Sprint 7.3 — Follow-up state machine
+
+Implement:
+
+```text
+NEW
+ ↓
++4h
+ ↓
+FU1
+ ↓
++24h
+ ↓
+FU2
+ ↓
++72h
+ ↓
+FU3
+ ↓
+GHOSTED
+```
+
+## Sprint 7.4 — Cancel-on-reply
+
+This deserves its own sprint because it is business-critical.
+
+```text
+Pending FU1
+Pending FU2
+Pending FU3
+
+        ↓
+
+Lead replies
+
+        ↓
+
+CANCEL ALL
+```
+
+and do it transactionally.
+
+## Sprint 7.5 — Follow-up templates
+
+Tenant-configurable:
+
+```text
+FU1
+FU2
+FU3
+```
+
+The PRD includes follow-up templates in tenant configuration. 
+
+---
+
+# PHASE 8 — Human Handoff
+
+Now we complete the AI → human lifecycle.
+
+## Sprint 8.1 — Handoff engine
+
+Triggers:
+
+```text
+explicit human request
+high intent
+callback request
+AI failure
+```
+
+These are directly specified in the PRD. 
+
+## Sprint 8.2 — Internal notifications
+
+```text
+InternalNotification
+```
+
+Channels initially:
+
+```text
+in-app
+email
+```
+
+## Sprint 8.3 — Assignment
+
+Allow:
+
+```text
+lead
+ ↓
+assigned agent
+```
+
+## Sprint 8.4 — Human takeover
+
+Once handed off:
+
+```text
+AI stops automated conversation
+```
+
+until the appropriate state allows automation again.
+
+---
+
+# PHASE 9 — Dashboard / SaaS UI
+
+Only **now** do we build the polished dashboard.
+
+This prevents us wasting frontend time while backend contracts are changing.
+
+## Sprint 9.1 — Dashboard
+
+```text
+Overview
+```
+
+## Sprint 9.2 — Leads
+
+```text
+Lead list
+Lead detail
+Qualification
+Timeline
+```
+
+## Sprint 9.3 — Conversations
+
+```text
+Inbox
+Conversation
+AI messages
+Human handoff
+```
+
+## Sprint 9.4 — Follow-ups
+
+```text
+pending
+completed
+cancelled
+failed
+```
+
+## Sprint 9.5 — Knowledge base
+
+```text
+documents
+chunks/status
+search
+```
+
+## Sprint 9.6 — Meta connections
+
+```text
+Facebook
+Instagram
+connection status
+```
+
+## Sprint 9.7 — Settings
+
+```text
+tenant
+users
+roles
+AI settings
+follow-up templates
+```
+
+---
+
+# PHASE 10 — Production Hardening + Launch
+
+This is the actual launch phase.
+
+## Sprint 10.1 — Security
+
+Audit:
+
+```text
+tenant isolation
+RLS
+JWT/session handling
+Meta signatures
+encrypted tokens
+CORS
+rate limits
+input validation
+SQL injection
+prompt injection
+secret handling
+```
+
+## Sprint 10.2 — Reliability
+
+Test:
+
+```text
+duplicate Meta webhook
+duplicate lead
+duplicate message
+AI timeout
+AI 429
+Meta API failure
+scheduler restart
+server restart
+DB restart
+```
+
+## Sprint 10.3 — Observability
+
+Implement:
+
+```text
+structured logs
+request IDs
+tenant IDs
+conversation IDs
+AI latency
+AI tokens
+failure tracking
+Sentry
+```
+
+## Sprint 10.4 — E2E
+
+The most important test:
+
+```text
+Meta lead
+ ↓
+Lead created
+ ↓
+AI response
+ ↓
+qualification
+ ↓
+follow-up scheduled
+ ↓
+lead doesn't reply
+ ↓
+follow-up sent
+ ↓
+lead replies
+ ↓
+follow-ups cancelled
+ ↓
+AI continues
+ ↓
+high intent
+ ↓
+human handoff
+```
+
+## Sprint 10.5 — Production deployment
+
+```text
+Domain
+ ↓
+Nginx
+ ↓
+Next.js
+ ↓
+FastAPI
+ ↓
+PostgreSQL
+```
+
+Docker Compose + HTTPS.
+
+---
+
+# PHASE 11 — Commercialization
+
+Once the core system works.
+
+## Sprint 11.1
+
+Plan enforcement:
+
+```text
+Starter
+Growth
+Scale
+Enterprise
+```
+
+The PRD already defines these tiers and their limits. 
+
+## Sprint 11.2
+
+Usage tracking:
+
+```text
+leads
+AI messages
+tokens
+active automations
+users
+```
+
+## Sprint 11.3
+
+Billing.
+
+## Sprint 11.4
+
+Onboarding wizard:
+
+```text
+Create account
+ ↓
+Connect Meta
+ ↓
+Configure business
+ ↓
+Upload knowledge
+ ↓
+Configure follow-ups
+ ↓
+Test AI
+ ↓
+Activate
+```
+
+---
+
+# PHASE 12 — Post-MVP Expansion
+
+These are deliberately **not allowed to delay MVP**.
+
+### 12.1 WhatsApp
+
+```text
+WhatsApp Business
+ ↓
+webhook
+ ↓
+same Conversation engine
+```
+
+### 12.2 CRM integrations
+
+```text
+Salesforce
+HubSpot
+Zoho
+custom webhooks
+```
+
+### 12.3 A/B testing
+
+```text
+FU-A
+FU-B
+```
+
+### 12.4 Advanced analytics
+
+```text
+response rate
+qualification rate
+handoff rate
+conversion
+AI performance
+campaign performance
+```
+
+### 12.5 AI improvements
+
+```text
+model routing
+prompt versions
+evaluation
+conversation scoring
+fine-tuning
+```
+
+The PRD itself places WhatsApp, CRM connectors, A/B testing, fine-tuning and advanced analytics in the post-MVP direction. 
+
+---
+
+# The critical dependency map
+
+We should **not** build in arbitrary feature order.
+
+The dependency chain is:
+
+```text
+PHASE 0
+Foundation
+   │
+   ▼
+PHASE 1
+Auth + Tenant
+   │
+   ▼
+PHASE 2
+Meta Integration
+   │
+   ▼
+PHASE 3
+Lead Engine
+   │
+   ▼
+PHASE 4
+Conversation Engine
+   │
+   ├───────────────┐
+   ▼               ▼
+PHASE 5          PHASE 6
+AI Engine        RAG
+   │               │
+   └───────┬───────┘
+           ▼
+       AI Nurturing
+           │
+           ▼
+       PHASE 7
+       Follow-ups
+           │
+           ▼
+       PHASE 8
+       Handoff
+           │
+           ▼
+       PHASE 9
+       Dashboard
+           │
+           ▼
+       PHASE 10
+       Production
+```
+
+That's the spine of the project.
+
+---
+
+# How we'll use AI coding agents
+
+This is particularly important.
+
+I don't want us giving the agent:
+
+> "Build the entire AI lead nurturing platform."
+
+That's how projects become inconsistent.
+
+Instead, every sprint will have:
+
+```text
+SPRINT
+│
+├── Objective
+├── Existing-state inspection
+├── Scope
+├── Files/modules allowed
+├── Data model
+├── API contract
+├── Business rules
+├── Edge cases
+├── Security requirements
+├── Tests
+├── Build verification
+└── Stop condition
+```
+
+And the agent instruction will be:
+
+```text
+Inspect first.
+Reuse existing code.
+Implement only this sprint.
+Do not redesign unrelated modules.
+Do not implement future phases.
+Run required verification.
+Report only what was actually changed/verified.
+Stop.
+```
+
+That fits the way you've been using OpenCode/Aloha/Ox and keeps the agents from expanding scope.
+
+---
+
+# Our implementation cadence
+
+I suggest we work like this:
+
+### For every sprint
+
+**You give the agent one sprint prompt.**
+
+Agent:
+
+```text
+inspect
+ ↓
+implement
+ ↓
+test
+ ↓
+build
+ ↓
+report
+```
+
+Then you bring the result here.
+
+**I become the gatekeeper.**
+
+I'll check:
+
+```text
+✓ requirement actually implemented
+✓ architecture still clean
+✓ no scope leakage
+✓ security/tenant isolation
+✓ API correctness
+✓ edge cases
+✓ production risks
+```
+
+Then we unlock the next sprint.
+
+---
+
+# MVP milestone structure
+
+Rather than thinking about 30 sprints, keep these milestones in your head:
+
+### M0 — Foundation
+
+```text
+Project runs
+```
+
+### M1 — SaaS Core
+
+```text
+Users + tenants + auth
+```
+
+### M2 — Meta Connected
+
+```text
+Meta → our backend
+```
+
+### M3 — Lead System
+
+```text
+Meta → Lead → DB
+```
+
+### M4 — Conversation System
+
+```text
+Lead → conversation
+```
+
+### M5 — AI
+
+```text
+Conversation → AI → response
+```
+
+### M6 — RAG
+
+```text
+Business knowledge → AI
+```
+
+### M7 — Automation
+
+```text
+No reply → automated follow-ups
+```
+
+### M8 — Human Handoff
+
+```text
+AI → human
+```
+
+### M9 — SaaS Dashboard
+
+```text
+Customer can operate everything
+```
+
+### M10 — Production
+
+```text
+Real customers can use it
+```
+
+---
+
+# One thing I want to lock before implementation
+
+The **true MVP vertical slice** should be:
+
+```text
+                 CUSTOMER
+                    │
+                    ▼
+             Connect Meta
+                    │
+                    ▼
+              Meta Lead
+                    │
+                    ▼
+              FastAPI Webhook
+                    │
+                    ▼
+                  Lead
+                    │
+                    ▼
+             Conversation
+                    │
+                    ▼
+              RAG + Groq
+                    │
+                    ▼
+              AI Response
+                    │
+                    ▼
+             Qualification
+                    │
+          ┌─────────┴─────────┐
+          ▼                   ▼
+      Continue              Handoff
+          │
+          ▼
+    Schedule FU1/FU2/FU3
+          │
+          ▼
+       No reply
+          │
+          ▼
+     Automated nurture
+```
+
+**If this entire loop works reliably, we have the actual product.**
+
+Everything else—beautiful dashboards, billing, analytics, additional channels, advanced settings—is wrapped around this core engine.
+
+## So I propose we start now with **Phase 0 → Sprint 0.1: Repository & Architecture Foundation**.
+
+

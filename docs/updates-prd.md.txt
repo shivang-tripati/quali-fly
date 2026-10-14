@@ -1,0 +1,638 @@
+Exactly. **10-O should not start with E2E testing.** It should start with a **product-readiness/setup audit**, and anything the tenant cannot configure themselves must be built before we call the messaging flow testable.
+
+The PRD already envisioned tenant-facing Meta OAuth, knowledge-base CRUD, follow-up configuration, notifications, and dashboard setup.  But it also explicitly put WhatsApp in Post-MVP, which we are now changing: **WhatsApp Business is MVP scope.** 
+
+## The important shift
+
+We should define the MVP as:
+
+```text
+                    QUALIFLY MVP
+                         │
+              ┌──────────┴──────────┐
+              │                     │
+          TENANT SETUP         CUSTOMER FLOW
+              │                     │
+      ┌───────┼────────┐            │
+      │       │        │            │
+   Business  AI/RAG  Channels       │
+      │       │        │            │
+      │       │    ┌───┼────┐       │
+      │       │    │   │    │       │
+      │       │   IG  FB   WA       │
+      │       │    │   │    │       │
+      └───────┴────┴───┴────┴───────┘
+                         │
+                      AI AGENT
+                         │
+              ┌──────────┼──────────┐
+              │          │          │
+           QUALIFY    FOLLOW-UP   HANDOFF
+                                      │
+                                  HUMAN TEAM
+```
+
+The **tenant must be able to get from signup to this state without developer/database intervention.**
+
+---
+
+# What we need before 10-O E2E
+
+I would introduce a new gate:
+
+## Phase 10-O — Messaging MVP Readiness
+
+And split it into **five parts**, not four.
+
+### 10-O.0 — Tenant Self-Service Readiness Audit
+
+First, inspect the actual implementation and answer:
+
+> **Can a brand-new tenant configure and operate the complete Flow B product from the UI/API without touching the database, `.env`, source code, or asking the developer to manually create records?**
+
+We need to inspect:
+
+### 1. Workspace/business setup
+
+Tenant should be able to configure things such as:
+
+```text
+Workspace
+├── Business name
+├── Business description
+├── Services / products
+├── Pricing information
+├── Service area
+├── Business hours
+└── AI-facing business context
+```
+
+Because the AI prompt is explicitly supposed to use tenant business context such as business name, pricing range, services and qualification context. 
+
+---
+
+### 2. AI agent setup
+
+Tenant needs a real place to configure the AI agent.
+
+At minimum:
+
+```text
+AI Agent
+├── Enabled / Disabled
+├── Agent name
+├── Business context
+├── Tone / response behavior
+├── Qualification goals
+├── Qualification dimensions
+│   ├── Budget
+│   ├── Timeline
+│   ├── Fit
+│   └── Authority
+├── Human handoff behavior
+└── Fallback behavior
+```
+
+Not necessarily an enormous prompt editor.
+
+The important thing is that the tenant controls the **business-specific inputs**, while QualiFly owns the underlying AI orchestration.
+
+---
+
+### 3. Knowledge/RAG setup
+
+Tenant must be able to say:
+
+> "This is what my AI agent should know."
+
+For example:
+
+```text
+Knowledge
+├── FAQs
+├── Pricing
+├── Services
+├── Policies
+├── Documents
+└── Website/business information
+```
+
+This already has a tenant-facing Knowledge area according to the Phase 9 verification, so we need to determine whether it is sufficient for the actual AI-agent setup or merely CRUD. 
+
+---
+
+# 4. Channel setup — THIS IS CRITICAL
+
+The tenant needs something like:
+
+```text
+Settings
+└── Channels
+
+    Facebook Messenger
+       [Connect]
+
+    Instagram
+       [Connect]
+
+    WhatsApp Business
+       [Connect]
+```
+
+And each connection needs a meaningful lifecycle:
+
+```text
+NOT CONNECTED
+      ↓
+CONNECTING
+      ↓
+CONNECTED
+      ↓
+WEBHOOK ACTIVE
+      ↓
+READY
+```
+
+Not simply:
+
+> Meta connection row exists.
+
+The tenant should be able to understand:
+
+```text
+Instagram
+● Connected
+● Webhook active
+● AI replies enabled
+● Follow-ups enabled
+```
+
+and:
+
+```text
+WhatsApp
+○ Not connected
+```
+
+or, after setup:
+
+```text
+WhatsApp Business
+● Connected
+Business: ABC Company
+Phone: +91 XXXXX XXXXX
+Messaging: Active
+Webhook: Active
+AI Agent: Enabled
+```
+
+---
+
+# 5. Follow-up setup
+
+The tenant must control the behavior we're going to test.
+
+For example:
+
+```text
+Follow-up automation
+
+After AI reply:
+
+Follow-up #1
+Delay: 4 hours
+Message: "Just checking in..."
+
+Follow-up #2
+Delay: 24 hours
+Message: "Wanted to follow up..."
+
+Follow-up #3
+Delay: 72 hours
+Message: "Let us know if you'd like..."
+```
+
+And:
+
+```text
+When customer replies:
+☑ Cancel pending follow-ups
+```
+
+The PRD explicitly describes configurable follow-up sequences and tenant customization. 
+
+---
+
+# 6. Human/team setup
+
+This is another important piece.
+
+A tenant needs to be able to operate the handoff itself.
+
+Something like:
+
+```text
+Team
+
+Owner
+  └── Admin
+       ├── Sales member
+       ├── Sales member
+       └── Sales member
+```
+
+And:
+
+```text
+Handoff settings
+
+☑ Notify team when human requested
+☑ Notify on high intent
+☑ Notify on AI failure
+```
+
+Then:
+
+```text
+Conversation
+     ↓
+Handoff
+     ↓
+Team inbox
+     ↓
+Claim
+     ↓
+Start
+     ↓
+Human reply
+```
+
+The existing handoff system already gives us a large portion of this runtime capability; the question is whether **a real tenant can configure and operate it without developer intervention**.
+
+---
+
+# Therefore our first actual gate
+
+Before building anything new, I would have the coding agent perform:
+
+## `10-O.0 — Tenant Self-Service Product Readiness Audit`
+
+It should inspect the current implementation, not assume anything.
+
+The output should be a matrix like:
+
+| Capability                 | Backend | API | UI | Tenant configurable | Ready |
+| -------------------------- | ------: | --: | -: | ------------------: | ----: |
+| Workspace/business profile |       ? |   ? |  ? |                   ? |     ? |
+| AI agent configuration     |       ? |   ? |  ? |                   ? |     ? |
+| Knowledge/RAG              |       ✅ |   ✅ |  ✅ |                   ✅ |     ? |
+| Facebook connection        |       ✅ |   ✅ |  ✅ |                   ✅ |     ? |
+| Instagram connection       |       ✅ |   ✅ |  ✅ |                   ✅ |     ? |
+| Messenger connection       |       ✅ |   ✅ |  ? |                   ? |     ? |
+| WhatsApp Business          |       ❌ |   ❌ |  ❌ |                   ❌ |     ❌ |
+| Follow-up configuration    |       ? |   ? |  ? |                   ? |     ? |
+| Team members               |       ? |   ? |  ? |                   ? |     ? |
+| Handoff configuration      |       ? |   ? |  ? |                   ? |     ? |
+| Channel enable/disable AI  |       ? |   ? |  ? |                   ? |     ? |
+| Channel health/status      |       ? |   ? |  ? |                   ? |     ? |
+| Human reply                |       ? |   ? |  ? |                   ? |     ? |
+
+**The agent must inspect the actual code and mark each one with evidence.**
+
+---
+
+# Then we build only the gaps
+
+This gives us a much cleaner sequence.
+
+### 10-O.0
+
+**Audit tenant self-service readiness**
+
+↓
+
+### 10-O.1
+
+**Build missing tenant setup**
+
+Everything required for a tenant to configure the product.
+
+↓
+
+### 10-O.2
+
+**Instagram real E2E**
+
+Now we can genuinely test:
+
+```text
+Tenant signs up
+       ↓
+Configures business
+       ↓
+Adds knowledge
+       ↓
+Connects Instagram
+       ↓
+Enables AI
+       ↓
+Customer sends DM
+       ↓
+Webhook
+       ↓
+Conversation
+       ↓
+AI
+       ↓
+Instagram reply
+       ↓
+Follow-up
+       ↓
+Customer reply
+       ↓
+Follow-up cancellation
+       ↓
+Human request
+       ↓
+Handoff
+       ↓
+Human claims
+       ↓
+Human replies
+       ↓
+Customer receives reply
+```
+
+That is the **primary MVP acceptance test**.
+
+---
+
+# 10-O.3 Messenger
+
+Same contract:
+
+```text
+Tenant setup
+    ↓
+Messenger connected
+    ↓
+Customer
+    ↓
+Messenger
+    ↓
+QualiFly
+    ↓
+AI
+    ↓
+Follow-up
+    ↓
+Handoff
+    ↓
+Human
+```
+
+Messenger should reuse the same conversation/AI/follow-up/handoff machinery. The existing implementation already deliberately has a shared `ChannelAdapter` because Messenger and Instagram use the same underlying conversation engine. 
+
+---
+
+# 10-O.4 WhatsApp Business — BUILD, not test
+
+This is where the biggest implementation work comes.
+
+We should **not** create:
+
+```text
+WhatsAppAIService
+WhatsAppFollowUpService
+WhatsAppConversationService
+```
+
+Instead:
+
+```text
+                  ConversationEngine
+                         │
+              ┌──────────┼──────────┐
+              │          │          │
+          Messenger  Instagram   WhatsApp
+           Adapter     Adapter     Adapter
+              │          │          │
+              └──────────┼──────────┘
+                         │
+                    AIConversation
+                         │
+                 Follow-up Engine
+                         │
+                   Human Handoff
+```
+
+The current architecture already establishes this direction with the channel adapter abstraction. 
+
+WhatsApp becomes **another transport**, not another product.
+
+---
+
+# WhatsApp tenant setup must be real
+
+The tenant should eventually be able to do:
+
+```text
+Settings
+   ↓
+Channels
+   ↓
+WhatsApp Business
+   ↓
+Connect
+   ↓
+Authenticate / configure Business
+   ↓
+Select Business Account
+   ↓
+Select Phone Number
+   ↓
+Register / verify webhook
+   ↓
+Connection validated
+   ↓
+WhatsApp = READY
+```
+
+The important word is **READY**.
+
+We shouldn't call a WhatsApp connection "connected" merely because credentials were stored.
+
+We need to establish:
+
+```text
+Credential valid
+        +
+Business identified
+        +
+Phone number identified
+        +
+Webhook registered/verified
+        +
+Inbound accepted
+        +
+Outbound capability verified
+        =
+READY
+```
+
+---
+
+# 10-O.5 WhatsApp real E2E
+
+Only after that:
+
+```text
+WhatsApp customer
+        ↕
+WhatsApp Business
+        ↕
+QualiFly
+        ↕
+Conversation
+        ↕
+AI Agent
+        ↕
+Follow-up
+        ↕
+Human Handoff
+        ↕
+Human Sales Rep
+```
+
+And test the same contract:
+
+### A. Initial conversation
+
+```text
+Customer → "Hi, I'm interested"
+       ↓
+QualiFly
+       ↓
+Conversation created
+       ↓
+AI
+       ↓
+WhatsApp response
+```
+
+### B. Qualification
+
+```text
+Customer
+   ↓
+budget / requirement / timeline
+   ↓
+AI
+   ↓
+qualification state
+```
+
+### C. Follow-up
+
+```text
+AI response
+   ↓
+customer silent
+   ↓
+FU becomes due
+   ↓
+WhatsApp follow-up
+```
+
+### D. Cancellation
+
+```text
+Customer responds
+   ↓
+inbound persisted
+   ↓
+pending follow-ups cancelled
+   ↓
+AI continues
+```
+
+### E. Handoff
+
+```text
+Customer:
+"I want to talk to someone."
+
+        ↓
+
+AI
+        ↓
+HumanHandoff
+        ↓
+Dashboard notification
+        ↓
+Human claims
+        ↓
+Human replies
+        ↓
+WhatsApp
+        ↓
+Customer
+```
+
+---
+
+# And Flow A stays
+
+We don't throw away the Lead Ads work.
+
+It simply becomes another acquisition path:
+
+```text
+                  QUALIFLY
+                     │
+          ┌──────────┴──────────┐
+          │                     │
+       FLOW A                FLOW B
+          │                     │
+    Meta Lead Form       Messaging Ads
+          │                     │
+        Lead            ┌───────┼────────┐
+                        │       │        │
+                    Instagram Messenger WhatsApp
+                        │       │        │
+                        └───────┼────────┘
+                                │
+                             AI Agent
+                                │
+                    ┌───────────┼───────────┐
+                    │           │           │
+                Qualify     Follow-up    Handoff
+                                            │
+                                          Human
+```
+
+So **Flow B becomes the primary product demonstration**, while Flow A remains a supported acquisition mechanism.
+
+---
+
+## The key principle I would lock now
+
+> **A feature is not MVP-ready merely because its backend exists. It is MVP-ready when a tenant can configure it, connect it, operate it, and observe its lifecycle without developer intervention.**
+
+That means our immediate next development phase should **not** be "Instagram E2E testing."
+
+It should be:
+
+> **10-O.0 — Tenant Self-Service & Messaging Readiness Audit**
+
+Then:
+
+> **10-O.1 — Build the missing tenant-owned setup/control plane**
+
+Then real Instagram/Messenger testing.
+
+Then WhatsApp implementation.
+
+Then real WhatsApp E2E.
+
+That will prevent us from spending time "testing" a system whose critical setup path isn't actually productized yet.
